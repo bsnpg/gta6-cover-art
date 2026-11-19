@@ -1,0 +1,4 @@
+Fonts shipped under app/fonts/ (all SIL Open Font License 1.1, see OFL-1.1.txt):
+- Anton-Regular.ttf — Anton, by Vernon Adams / The Anton Project Authors (google/fonts ofl/anton)
+- Oswald.ttf (variable wght) — Oswald, by Vernon Adams (google/fonts ofl/oswald)
+- Yellowtail-Regular.woff2 — Yellowtail, by Astigmatic (google/fonts ofl/yellowtail)

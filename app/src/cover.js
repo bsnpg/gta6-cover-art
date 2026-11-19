@@ -132,6 +132,17 @@ export const GRADES = {
     title: '#ffffff', titleStroke: 'rgba(40,0,50,0.85)',
     accent: '#ffe66d', script: '#ffd6f5', skyline: 'rgba(38,2,52,0.92)',
   },
+  // 7th grade: our own warm sunset-duotone palette (orange -> magenta ->
+  // deep plum) paired with the Poster Ink post-process. The palette is
+  // Dorada's own; the ink effect is what gives it the print identity.
+  'poster-ink': {
+    label: 'Poster Ink',
+    filter: 'saturate(1.6) contrast(1.28) sepia(0.22) brightness(1.02)',
+    tint: 'rgba(255,96,40,0.3)', tintMode: 'overlay',
+    band: ['#ff6b35', '#d6336c', '#2b0a3d'],
+    title: '#ffffff', titleStroke: 'rgba(30,4,40,0.9)',
+    accent: '#ffd23f', script: '#ff9e5e', skyline: 'rgba(24,3,36,0.92)',
+  },
 };
 
 export const PRESETS = [
@@ -156,6 +167,10 @@ export function createDefaultState() {
     kicker: 'ISLA DORADA',
     script: 'isla dorada nights',
     stickers: { est: true, newBadge: true, heat: 4 },
+    // Poster Ink overlay: posterize + halftone dots over the PHOTO PANELS
+    // only (type, band, badges and stickers stay crisp on top).
+    // `amount` 0..1 scales both steps.
+    ink: { on: false, amount: 0.85 },
     panels: Array.from({ length: MAX_PANELS }, () => ({
       img: null, name: '', zoom: 1, panX: 0.5, panY: 0.5, grade: 'global',
     })),
@@ -327,6 +342,93 @@ function fitFont(ctx, text, family, weight, startSize, maxWidth) {
   return size;
 }
 
+/** Poster Ink post-process: posterize the photo panels, then overlay a
+ * halftone dot grid sampled from the posterized luminance.
+ *
+ * Own implementation, two passes over the given rects (default: the whole
+ * canvas):
+ *  1. Posterize — each channel is quantized to a few steps (via a 256-entry
+ *     lookup table) and blended toward the quantized value by `amount`, with
+ *     a mild warm-duotone push (shadows toward plum, highlights kept warm).
+ *  2. Halftone — dots on a grid whose spacing scales with the canvas
+ *     (max(W,H)/85), so preview and 1920x1080 export look the same. Each
+ *     dot's radius grows with local darkness, so shadows read as dense ink
+ *     and highlights stay open. Dot colour is deep plum ink, not pure black,
+ *     to keep it in the sunset palette. The dot grid stays anchored to the
+ *     canvas origin, so dots line up across panel gaps.
+ * Cost: one getImageData/putImageData per rect + ~5k circles at 1920x1080 —
+ * fast enough for live preview redraws and for export.
+ * The caller inks the photo panels BEFORE the band, type and stickers are
+ * drawn, so the halftone reads across the photos while all type stays
+ * crisp on top — the way a real poster keeps type over halftone art. */
+function applyPosterInk(ctx, W, H, amount, rects) {
+  const a = clamp(amount ?? 0.85, 0, 1);
+  if (a <= 0) return;
+  const steps = 5;
+  const lut = new Uint8Array(256);
+  for (let v = 0; v < 256; v++) {
+    lut[v] = Math.round(Math.round((v / 255) * (steps - 1)) * (255 / (steps - 1)));
+  }
+  // Warm-duotone channel gains, blended in with the posterize step.
+  const gr = 1.06, gg = 0.96, gb = 1.0;
+  // Areas to ink: the photo panels only (default: the whole canvas).
+  const areas = (rects && rects.length ? rects : [{ x: 0, y: 0, w: W, h: H }])
+    .map((r) => {
+      const x = Math.max(0, Math.round(r.x));
+      const y = Math.max(0, Math.round(r.y));
+      return {
+        x, y,
+        w: Math.min(W - x, Math.round(r.w)),
+        h: Math.min(H - y, Math.round(r.h)),
+      };
+    })
+    .filter((r) => r.w > 0 && r.h > 0);
+  // Posterize each area in place, keeping its pixel data for the halftone pass.
+  const inks = areas.map((r) => {
+    const img = ctx.getImageData(r.x, r.y, r.w, r.h);
+    const d = img.data;
+    for (let i = 0; i < d.length; i += 4) {
+      d[i] = clamp(d[i] + (lut[d[i]] * gr - d[i]) * a, 0, 255);
+      d[i + 1] = clamp(d[i + 1] + (lut[d[i + 1]] * gg - d[i + 1]) * a, 0, 255);
+      d[i + 2] = clamp(d[i + 2] + (lut[d[i + 2]] * gb - d[i + 2]) * a, 0, 255);
+    }
+    ctx.putImageData(img, r.x, r.y);
+    return { r, d };
+  });
+
+  // Halftone dots, sampled from the posterized luminance, inside the inked
+  // areas only.
+  const spacing = Math.max(9, Math.round(Math.max(W, H) / 85));
+  const maxR = spacing * 0.62;
+  ctx.save();
+  ctx.fillStyle = `rgba(26,4,32,${(0.55 * a + 0.25).toFixed(2)})`;
+  const half = spacing / 2;
+  for (const { r, d } of inks) {
+    // First grid line at or below the rect top, on the canvas-anchored grid.
+    const startY = Math.ceil((r.y - half) / spacing) * spacing + half;
+    for (let gy = startY; gy < r.y + r.h; gy += spacing) {
+      const row = Math.round(gy);
+      // Offset alternate rows by half a step (classic halftone stagger).
+      const xOff = (Math.round(gy / spacing) % 2 === 0) ? 0 : half;
+      const startX = Math.ceil((r.x - half - xOff) / spacing) * spacing + half + xOff;
+      for (let gx = startX; gx < r.x + r.w; gx += spacing) {
+        const cx = Math.round(gx);
+        const idx = ((row - r.y) * r.w + (cx - r.x)) * 4;
+        if (idx < 0 || idx + 2 >= d.length) continue;
+        const lum = (d[idx] * 0.3 + d[idx + 1] * 0.59 + d[idx + 2] * 0.11) / 255;
+        const darkness = 1 - lum;
+        if (darkness < 0.12) continue;
+        const rad = maxR * Math.pow(darkness, 1.15) * (0.55 + 0.45 * a);
+        if (rad < 0.7) continue;
+        ctx.beginPath();
+        ctx.arc(cx, row, rad, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+  ctx.restore();
+}
+
 /** Draws the complete poster for `state` onto `canvas` at its own size. */
 export function drawCover(canvas, state) {
   const ctx = canvas.getContext('2d');
@@ -344,6 +446,14 @@ export function drawCover(canvas, state) {
 
   // photo panels
   panels.forEach((rect, i) => drawPanel(ctx, rect, state.panels[i], grade, i));
+
+  // Poster Ink over the photo panels ONLY, before the band, type, badges
+  // and stickers: the dots read across the photos while everything drawn
+  // after this renders crisp on top (any grade; the Poster Ink grade just
+  // turns it on by default). Same intensity as before — only the area moved.
+  if (state.ink && state.ink.on) {
+    applyPosterInk(ctx, W, H, state.ink.amount ?? 0.85, panels);
+  }
 
   // ---- title band ----
   const band = ctx.createLinearGradient(0, bandY, 0, H);

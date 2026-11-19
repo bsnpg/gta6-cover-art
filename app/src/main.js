@@ -92,6 +92,10 @@ function randomize() {
   state.title = preset.title;
   state.tagline = preset.tagline;
   state.script = preset.script;
+  // Poster Ink grade implies the overlay; other grades randomize it on
+  // about a quarter of the time so the ink look keeps surfacing.
+  state.ink.on = state.grade === 'poster-ink' || Math.random() < 0.25;
+  if (state.grade === 'poster-ink') state.ink.amount = 0.85;
   state.stickers.heat = 1 + Math.floor(Math.random() * 5);
   // shuffle the sample order so panels never repeat a photo
   const ids = [...SAMPLE_ORDER];
@@ -174,6 +178,13 @@ function buildGradeButtons() {
     b.innerHTML = `<span class="swatch" style="background:linear-gradient(135deg, ${def.band[0]}, ${def.band[1]}, ${def.band[2]})"></span>${def.label}`;
     b.addEventListener('click', () => {
       state.grade = id;
+      // The Poster Ink grade is the ink look: picking it turns the overlay
+      // on at its default intensity. Other grades leave the overlay as-is,
+      // so Ink can sit over any grade.
+      if (id === 'poster-ink') {
+        state.ink.on = true;
+        state.ink.amount = Math.max(state.ink.amount || 0, 0.85);
+      }
       syncControls();
       redraw();
     });
@@ -290,6 +301,9 @@ function syncControls() {
   $('sticker-est').checked = !!state.stickers.est;
   $('sticker-new').checked = !!state.stickers.newBadge;
   $('sticker-heat').value = String(state.stickers.heat);
+  $('ink-toggle').checked = !!state.ink.on;
+  $('ink-amount').value = String(Math.round((state.ink.amount ?? 0.85) * 100));
+  $('ink-amount-val').textContent = `${Math.round((state.ink.amount ?? 0.85) * 100)}%`;
   document.querySelectorAll('#layout-buttons .pick').forEach((b, i) => {
     b.classList.toggle('active', Object.keys(LAYOUTS)[i] === state.layout);
   });
@@ -397,6 +411,21 @@ for (const key of ['title', 'tagline', 'kicker', 'script-line']) {
 $('sticker-est').addEventListener('change', (e) => { state.stickers.est = e.target.checked; redraw(); });
 $('sticker-new').addEventListener('change', (e) => { state.stickers.newBadge = e.target.checked; redraw(); });
 $('sticker-heat').addEventListener('change', (e) => { state.stickers.heat = Number(e.target.value); redraw(); });
+$('ink-toggle').addEventListener('change', (e) => {
+  state.ink.on = e.target.checked;
+  redraw();
+});
+$('ink-amount').addEventListener('input', (e) => {
+  state.ink.amount = Number(e.target.value) / 100;
+  $('ink-amount-val').textContent = `${e.target.value}%`;
+  // Dragging the intensity turns the overlay on, so the effect is visible
+  // immediately instead of silently changing a hidden value.
+  if (!state.ink.on) {
+    state.ink.on = true;
+    $('ink-toggle').checked = true;
+  }
+  redraw();
+});
 
 document.querySelectorAll('.size-pick').forEach((b) => {
   b.addEventListener('click', () => {
@@ -439,6 +468,15 @@ async function init() {
     document.body.classList.add(`shot-${shot.mode}`);
     state.layout = LAYOUTS[shot.layout] ? shot.layout : 'hero-left';
     state.grade = GRADES[shot.grade] ? shot.grade : 'sunset';
+    // Poster Ink for shots: explicit ink=/inkAmount= win; otherwise the
+    // Poster Ink grade turns the overlay on at its default intensity.
+    if (shot.inkAmount !== null && shot.inkAmount !== undefined) state.ink.amount = shot.inkAmount;
+    if (shot.ink !== null && shot.ink !== undefined) {
+      state.ink.on = shot.ink;
+    } else {
+      state.ink.on = state.grade === 'poster-ink';
+      if (state.ink.on) state.ink.amount = Math.max(state.ink.amount || 0, 0.85);
+    }
     state.title = shot.title;
     state.tagline = shot.tagline;
     state.kicker = shot.kicker;

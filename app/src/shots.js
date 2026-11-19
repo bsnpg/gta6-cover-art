@@ -16,10 +16,21 @@ export function parseShot(query) {
     const m = sizeRaw.match(/^(\d+)x(\d+)$/);
     if (m) size = { w: +m[1], h: +m[2] };
   }
+  // Poster Ink: ink=1 turns the overlay on, inkAmount=0..1 sets intensity.
+  // Absent ink param + grade=poster-ink also turns it on (grade default).
+  let ink = null;
+  let inkAmount = null;
+  if (query.get('ink') !== null) ink = query.get('ink') === '1' || query.get('ink') === 'true';
+  if (query.get('inkAmount') !== null) {
+    const v = Number(query.get('inkAmount'));
+    if (Number.isFinite(v)) inkAmount = Math.min(1, Math.max(0, v));
+  }
   return {
     mode,
     layout: query.get('layout') || 'hero-left',
     grade: query.get('grade') || 'sunset',
+    ink,
+    inkAmount,
     title: query.get('title') || query.get('caption') || 'DORADA HEAT',
     tagline: query.get('tagline') || 'EVERY STREET IS A STAGE',
     kicker: query.get('kicker') || 'ISLA DORADA',
